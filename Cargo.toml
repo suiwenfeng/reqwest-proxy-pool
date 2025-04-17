@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Wenfeng Sui <suiwenfeng@qq.com>"]
 description = "proxy pool middleware for reqwest"
 license = "MIT"
-keywords = ["proxy", "pool", "reqwest", "middleware", "http", "client"]
+keywords = ["proxy", "reqwest", "middleware", "http", "client"]
 categories = ["web-programming::http-client"]
 
 [dependencies]
