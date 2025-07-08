@@ -114,11 +114,10 @@ impl ProxyPool {
                 // Create a client using this proxy
                 let proxy_client = match reqwest::Client::builder()
                     .timeout(timeout)
-                    .proxy(reqwest::Proxy::all(&proxy_url).unwrap_or_else(|_| {
-                        // 正确指定返回类型为 Option<reqwest::Url>
-                        reqwest::Proxy::custom(move |_| -> Option<reqwest::Url> { None })
-                    }))
-                    .build() {
+                    //this is the real change
+                    .proxy(proxy.to_reqwest_proxy().unwrap())
+                    .build()
+                {
                     Ok(client) => client,
                     Err(_) => return (proxy_url, false, None),
                 };
