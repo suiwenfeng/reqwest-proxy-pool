@@ -114,7 +114,6 @@ impl ProxyPool {
                 // Create a client using this proxy
                 let proxy_client = match reqwest::Client::builder()
                     .timeout(timeout)
-                    //this is the real change
                     .proxy(proxy.to_reqwest_proxy().unwrap())
                     .build()
                 {
