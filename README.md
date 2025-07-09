@@ -37,7 +37,7 @@ proxy pool middleware implementation for
 
 ```
 [dependencies]
-reqwest-proxy-pool = "0.1.0"
+reqwest-proxy-pool = "0.1.1"
 reqwest-middleware = "0.4.2"
 tokio = { version = "1", features = ["full"] }
 ```
