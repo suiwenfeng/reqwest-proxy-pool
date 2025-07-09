@@ -13,10 +13,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ProxyPoolConfig::builder()
         // free socks5 proxy urls, format like `Free-Proxy`
         .sources(vec![
-            "https://raw.githubusercontent.com/dpangestuw/Free-Proxy/main/socks5_proxies.txt",
+            "https://cdn.jsdelivr.net/gh/dpangestuw/Free-Proxy@main/socks5_proxies.txt",
+            "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt"
         ])
         .health_check_timeout(Duration::from_secs(5))
-        .health_check_url("https://www.example.com")
+        .health_check_url("https://httpbin.org/ip")
         .retry_count(2)
         .selection_strategy(ProxySelectionStrategy::FastestResponse)
         // rate limit for each proxy, lower performance but avoid banned

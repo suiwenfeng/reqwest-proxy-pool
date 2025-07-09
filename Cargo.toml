@@ -1,6 +1,6 @@
 [package]
 name = "reqwest-proxy-pool"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Wenfeng Sui <suiwenfeng@qq.com>"]
 description = "proxy pool middleware for reqwest"
@@ -9,17 +9,17 @@ keywords = ["proxy", "reqwest", "middleware", "http", "client"]
 categories = ["web-programming::http-client"]
 
 [dependencies]
-reqwest = { version = ">=0.12.15", features = ["json", "socks"] }
+reqwest = { version = "0.12.22", features = ["json", "socks"] }
 reqwest-middleware = ">=0.4.2"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1.46.1", features = ["full"] }
 futures = "0.3"
 log = "0.4.27"
 thiserror = "2.0.12"
 async-trait = "0.1"
 governor = "0.10.0"
-rand = "0.9.0"
+rand = "0.9.1"
 url = "2.3"
-parking_lot = "0.12"
+parking_lot = "0.12.4"
 anyhow = "1.0.81"
 http = "1.1"
 
