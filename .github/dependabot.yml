@@ -1,0 +1,26 @@
+version: 2
+updates:
+  # Cargo 依赖：每周自动提 PR 升级兼容版本
+  # 对于大版本升级（如 reqwest 0.12→0.13），Dependabot 也会提 PR
+  # CI 的 semver-check 和 test job 会自动在这些 PR 上运行，验证是否有破坏性变更
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps)"
+
+  # GitHub Actions 本身也保持更新
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(ci)"
