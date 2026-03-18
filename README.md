@@ -35,13 +35,13 @@ proxy pool middleware implementation for
 
 - Add to your Cargo.toml:
 
-```
+```toml
 [dependencies]
-reqwest = "0.12.22"
-reqwest-proxy-pool = "0.1.2"
-reqwest-middleware = "0.4.2"
+reqwest = "0.12"
+reqwest-proxy-pool = "0.1"
+reqwest-middleware = "0.4"
 tokio = { version = "1", features = ["full"] }
-env_logger = "0.11.8"
+env_logger = "0.11"
 ```
 
 ### Usage
