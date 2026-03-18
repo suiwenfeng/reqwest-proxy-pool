@@ -8,7 +8,7 @@ use crate::utils;
 use futures::future;
 use log::{info, warn};
 use parking_lot::{Mutex, RwLock};
-use rand::Rng;
+use rand::RngExt;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;

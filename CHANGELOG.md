@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Todo]
 - support caching request body
 
+## [0.1.5] - 2026-03-18
+### Changed
+- Upgrade `reqwest` 0.12 → 0.13 (switches default TLS to rustls, adds HTTP/3 support)
+- Upgrade `reqwest-middleware` 0.4 → 0.5 (tracks reqwest 0.13)
+- Upgrade `rand` 0.9 → 0.10 (`RngExt` trait replaces `Rng` for `random_range`)
+- Update MSRV to `1.85` (required by `getrandom` 0.4 via `rand` 0.10)
+### Added
+- CI: MSRV job to verify `rust-version` stays accurate on every PR
+- CI: Build Examples job to catch public API breakage from user perspective
+### Fixed
+- README code block language tag for correct syntax highlighting
+
 ## [0.1.4] - 2026-03-18
 ### Fixed
 - README installation example now uses semver-compatible version constraints

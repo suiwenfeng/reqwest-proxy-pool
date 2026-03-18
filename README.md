@@ -37,16 +37,15 @@ proxy pool middleware implementation for
 
 ```toml
 [dependencies]
-reqwest = "0.12"
+reqwest = "0.13"
 reqwest-proxy-pool = "0.1"
-reqwest-middleware = "0.4"
+reqwest-middleware = "0.5"
 tokio = { version = "1", features = ["full"] }
-env_logger = "0.11"
 ```
 
 ### Usage
 
-``` Rust
+```rust
 //! Simple example of using reqwest-proxy-pool.
 
 use reqwest_middleware::ClientBuilder;
@@ -55,8 +54,6 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
-
     println!("Initializing proxy pool...");
     
     let config = ProxyPoolConfig::builder()

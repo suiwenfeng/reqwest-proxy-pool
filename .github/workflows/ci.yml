@@ -42,6 +42,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --examples
 
+  # 在声明的最低版本上编译，防止 rust-version 字段和实际要求不一致
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --all-features
+
   # 检查发布到 crates.io 的包是否意外引入了破坏性 API 变更
   semver:
     name: Semver Check
