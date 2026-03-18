@@ -1,0 +1,25 @@
+#!/bin/sh
+# Pre-push hook: runs fast local checks before pushing.
+# Slower checks (MSRV, semver-checks) are left to CI.
+#
+# Install:
+#   git config core.hooksPath .githooks
+
+set -e
+
+# ensure cargo is in PATH (rustup installation)
+export PATH="$HOME/.cargo/bin:$PATH"
+
+echo "[ pre-push ] fmt check..."
+cargo fmt --check
+
+echo "[ pre-push ] clippy..."
+cargo clippy --all-features -- -D warnings
+
+echo "[ pre-push ] test..."
+cargo test --all-features
+
+echo "[ pre-push ] build examples..."
+cargo build --examples
+
+echo "[ pre-push ] all checks passed."
