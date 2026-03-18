@@ -1,6 +1,11 @@
 //! Proxy representation and status.
 
-use governor::{clock::DefaultClock, middleware::NoOpMiddleware, state::{InMemoryState, NotKeyed}, Quota, RateLimiter};
+use governor::{
+    clock::DefaultClock,
+    middleware::NoOpMiddleware,
+    state::{InMemoryState, NotKeyed},
+    Quota, RateLimiter,
+};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
@@ -39,9 +44,11 @@ impl Proxy {
     /// Create a new proxy with the given URL and rate limit.
     pub fn new(url: String, max_rps: f64) -> Self {
         // Create a rate limiter for this proxy
-        let quota = Quota::per_second(NonZeroU32::new(max_rps.ceil() as u32).unwrap_or(NonZeroU32::new(1).unwrap()));
+        let quota = Quota::per_second(
+            NonZeroU32::new(max_rps.ceil() as u32).unwrap_or(NonZeroU32::new(1).unwrap()),
+        );
         let limiter = Arc::new(RateLimiter::direct(quota));
-        
+
         Self {
             url,
             status: ProxyStatus::Unknown,
@@ -52,12 +59,12 @@ impl Proxy {
             limiter,
         }
     }
-    
+
     /// Convert the proxy URL to a reqwest::Proxy.
     pub fn to_reqwest_proxy(&self) -> Result<reqwest::Proxy, reqwest::Error> {
         reqwest::Proxy::all(&self.url)
     }
-    
+
     /// Calculate the success rate of this proxy.
     pub fn success_rate(&self) -> f64 {
         let total = self.success_count + self.failure_count;

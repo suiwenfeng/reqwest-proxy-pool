@@ -1,7 +1,7 @@
 //! Simple example of using reqwest-proxy-pool.
 
 use reqwest_middleware::ClientBuilder;
-use reqwest_proxy_pool::{ProxyPoolMiddleware, ProxyPoolConfig, ProxySelectionStrategy};
+use reqwest_proxy_pool::{ProxyPoolConfig, ProxyPoolMiddleware, ProxySelectionStrategy};
 use std::time::Duration;
 
 #[tokio::main]
@@ -9,7 +9,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     println!("Initializing proxy pool...");
-    
+
     let config = ProxyPoolConfig::builder()
         // free socks5 proxy urls, format like `Free-Proxy`
         .sources(vec![
@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Sending request...");
     let response = client.get("https://httpbin.org/ip").send().await?;
-    
+
     println!("Status: {}", response.status());
     println!("Response: {}", response.text().await?);
 

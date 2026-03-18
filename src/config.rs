@@ -122,12 +122,18 @@ impl ProxyPoolConfigBuilder {
     pub fn build(self) -> ProxyPoolConfig {
         ProxyPoolConfig {
             sources: self.sources,
-            health_check_interval: self.health_check_interval.unwrap_or(Duration::from_secs(300)),
+            health_check_interval: self
+                .health_check_interval
+                .unwrap_or(Duration::from_secs(300)),
             health_check_timeout: self.health_check_timeout.unwrap_or(Duration::from_secs(10)),
             min_available_proxies: self.min_available_proxies.unwrap_or(3),
-            health_check_url: self.health_check_url.unwrap_or_else(|| "https://www.google.com".to_string()),
+            health_check_url: self
+                .health_check_url
+                .unwrap_or_else(|| "https://www.google.com".to_string()),
             retry_count: self.retry_count.unwrap_or(3),
-            selection_strategy: self.selection_strategy.unwrap_or(ProxySelectionStrategy::FastestResponse),
+            selection_strategy: self
+                .selection_strategy
+                .unwrap_or(ProxySelectionStrategy::FastestResponse),
             max_requests_per_second: self.max_requests_per_second.unwrap_or(5.0),
         }
     }
