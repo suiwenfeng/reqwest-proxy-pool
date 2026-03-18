@@ -31,6 +31,17 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-features -- -D warnings
 
+  # 编译 examples，验证面向用户的公开 API 可正常使用
+  # 只编译不运行，避免依赖外部网络服务（代理源、httpbin 等）
+  examples:
+    name: Build Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --examples
+
   # 检查发布到 crates.io 的包是否意外引入了破坏性 API 变更
   semver:
     name: Semver Check
