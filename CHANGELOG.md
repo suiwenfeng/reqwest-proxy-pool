@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Todo]
 - support caching request body
 
+## [0.2.1] - 2026-03-20
+### Changed
+- README installation snippet now uses `reqwest-proxy-pool = "0.2"` to match APIs used in examples.
+- README now consolidates `ResponseClassifier` usage into the main `Usage` section and removes duplicated classifier subsection.
+- README `Usage` example aligns with `src/examples/simple.rs` (classifier + `danger_accept_invalid_certs` + updated proxy sources).
+- `simple` example removes `env_logger::init()` for cleaner out-of-box execution.
+
 ## [0.2.0] - 2026-03-20
 ### Added
 - `ResponseClassifier` trait and `ProxyResponseVerdict` enum for business-level proxy health feedback (anti-bot/captcha detection)

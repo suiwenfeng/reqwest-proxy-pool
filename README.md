@@ -35,7 +35,7 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 reqwest = "0.13"
-reqwest-proxy-pool = "0.1"
+reqwest-proxy-pool = "0.2"
 reqwest-middleware = "0.5"
 tokio = { version = "1", features = ["full"] }
 ```
@@ -44,20 +44,38 @@ tokio = { version = "1", features = ["full"] }
 
 ```rust
 use reqwest_middleware::ClientBuilder;
-use reqwest_proxy_pool::{ProxyPoolConfig, ProxyPoolMiddleware, ProxySelectionStrategy};
+use reqwest_proxy_pool::{
+    ProxyPoolConfig, ProxyPoolMiddleware, ProxyResponseVerdict, ProxySelectionStrategy,
+    ResponseClassifier,
+};
 use std::time::Duration;
+
+struct CaptchaDetector;
+
+impl ResponseClassifier for CaptchaDetector {
+    fn classify(&self, response: &reqwest::Response) -> ProxyResponseVerdict {
+        match response.status().as_u16() {
+            403 | 429 => ProxyResponseVerdict::ProxyBlocked,
+            500..=599 => ProxyResponseVerdict::Passthrough,
+            _ => ProxyResponseVerdict::Success,
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ProxyPoolConfig::builder()
         .sources(vec![
-            "https://raw.githubusercontent.com/dpangestuw/Free-Proxy/main/socks5_proxies.txt",
+            "https://cdn.jsdelivr.net/gh/dpangestuw/Free-Proxy@main/socks5_proxies.txt",
+            "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt",
         ])
         .health_check_timeout(Duration::from_secs(5))
-        .health_check_url("https://www.example.com")
+        .health_check_url("https://httpbin.org/ip")
         .retry_count(2)
         .selection_strategy(ProxySelectionStrategy::FastestResponse)
         .max_requests_per_second(3.0)
+        .response_classifier(CaptchaDetector)
+        .danger_accept_invalid_certs(true)
         .build();
 
     let proxy_pool = ProxyPoolMiddleware::new(config).await?;
@@ -73,37 +91,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
-
-### Custom Response Classifier
-
-Detect anti-bot/captcha responses and automatically retry with a different proxy:
-
-```rust
-use reqwest_proxy_pool::{ResponseClassifier, ProxyResponseVerdict};
-
-struct CaptchaDetector;
-
-impl ResponseClassifier for CaptchaDetector {
-    fn classify(&self, response: &reqwest::Response) -> ProxyResponseVerdict {
-        match response.status().as_u16() {
-            403 | 429 => ProxyResponseVerdict::ProxyBlocked,
-            500..=599 => ProxyResponseVerdict::Passthrough,
-            _ => ProxyResponseVerdict::Success,
-        }
-    }
-}
-
-let config = ProxyPoolConfig::builder()
-    .sources(vec!["..."])
-    .response_classifier(CaptchaDetector)
-    .build();
-```
-
-| Verdict | Effect |
-|---------|--------|
-| `Success` | Proxy records a success |
-| `ProxyBlocked` | Proxy records a failure, retries with another proxy |
-| `Passthrough` | Returns response as-is, proxy stats unaffected |
 
 ### Configuration Options
 
