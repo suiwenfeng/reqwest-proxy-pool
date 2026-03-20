@@ -11,7 +11,7 @@ Proxy pool middleware implementation for [`reqwest-middleware`](https://crates.i
 
 ### ✨ Comprehensive Proxy Support
 
-- Automatic parsing of free SOCKS5 proxies from multiple sources
+- Automatic parsing of free SOCKS5/SOCKS5H proxies from multiple sources
 - Built-in health checking with customizable timeout and test URL
 
 ### ⚡ Intelligent Proxy Management
@@ -19,6 +19,7 @@ Proxy pool middleware implementation for [`reqwest-middleware`](https://crates.i
 - Multiple proxy selection strategies (FastestResponse, RoundRobin, Random)
 - Per-proxy rate limiting to avoid bans
 - Automatic retry mechanism for failed requests
+- Custom response classifier for business-level proxy health (anti-bot/captcha detection)
 
 ### 🔧 Easy Configuration
 
@@ -73,6 +74,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Custom Response Classifier
+
+Detect anti-bot/captcha responses and automatically retry with a different proxy:
+
+```rust
+use reqwest_proxy_pool::{ResponseClassifier, ProxyResponseVerdict};
+
+struct CaptchaDetector;
+
+impl ResponseClassifier for CaptchaDetector {
+    fn classify(&self, response: &reqwest::Response) -> ProxyResponseVerdict {
+        match response.status().as_u16() {
+            403 | 429 => ProxyResponseVerdict::ProxyBlocked,
+            500..=599 => ProxyResponseVerdict::Passthrough,
+            _ => ProxyResponseVerdict::Success,
+        }
+    }
+}
+
+let config = ProxyPoolConfig::builder()
+    .sources(vec!["..."])
+    .response_classifier(CaptchaDetector)
+    .build();
+```
+
+| Verdict | Effect |
+|---------|--------|
+| `Success` | Proxy records a success |
+| `ProxyBlocked` | Proxy records a failure, retries with another proxy |
+| `Passthrough` | Returns response as-is, proxy stats unaffected |
+
 ### Configuration Options
 
 | Option                    | Description                           | Default                    |
@@ -85,6 +117,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `retry_count`             | Number of retries for failed requests | 3                          |
 | `selection_strategy`      | Proxy selection algorithm             | `FastestResponse`          |
 | `max_requests_per_second` | Rate limit per proxy                  | 5.0                        |
+| `response_classifier`     | Custom response classifier for proxy health | `DefaultResponseClassifier` |
+| `danger_accept_invalid_certs` | Accept invalid TLS certs (needed for most free proxies) | `false` |
 
 ## License
 

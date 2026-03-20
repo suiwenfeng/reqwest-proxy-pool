@@ -25,9 +25,13 @@ pub(crate) fn parse_proxy_list(content: &str) -> Vec<String> {
         .lines()
         .filter_map(|line| {
             let line = line.trim();
-            if line.starts_with("socks5://") {
+            if line.starts_with("socks5://") || line.starts_with("socks5h://") {
                 Some(line.to_string())
-            } else if line.contains(':') && !line.starts_with('#') && !line.is_empty() {
+            } else if line.contains(':')
+                && !line.contains("://")
+                && !line.starts_with('#')
+                && !line.is_empty()
+            {
                 // Try to parse IP:PORT format
                 Some(format!("socks5://{}", line))
             } else {
@@ -35,4 +39,36 @@ pub(crate) fn parse_proxy_list(content: &str) -> Vec<String> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_proxy_list;
+
+    #[test]
+    fn parse_supports_socks5_and_socks5h() {
+        let content = "socks5://127.0.0.1:1080\nsocks5h://127.0.0.2:1080\n";
+        let parsed = parse_proxy_list(content);
+        assert_eq!(
+            parsed,
+            vec![
+                "socks5://127.0.0.1:1080".to_string(),
+                "socks5h://127.0.0.2:1080".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_rejects_invalid_socks5_prefix() {
+        let content = "socks5x://127.0.0.1:1080\nnot-a-proxy\n";
+        let parsed = parse_proxy_list(content);
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn parse_plain_host_port_to_socks5() {
+        let content = "1.2.3.4:1080\n# comment\n";
+        let parsed = parse_proxy_list(content);
+        assert_eq!(parsed, vec!["socks5://1.2.3.4:1080".to_string()]);
+    }
 }

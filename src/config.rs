@@ -1,5 +1,8 @@
 //! Configuration for the proxy pool.
 
+use crate::classifier::{DefaultResponseClassifier, ResponseClassifier};
+use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Strategy for selecting a proxy from the pool.
@@ -16,30 +19,104 @@ pub enum ProxySelectionStrategy {
 }
 
 /// Configuration for the proxy pool.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProxyPoolConfig {
     /// Source URLs to fetch proxy lists from.
-    pub sources: Vec<String>,
+    pub(crate) sources: Vec<String>,
     /// Interval between health checks.
-    pub health_check_interval: Duration,
+    pub(crate) health_check_interval: Duration,
     /// Timeout for health checks.
-    pub health_check_timeout: Duration,
+    pub(crate) health_check_timeout: Duration,
     /// Minimum number of available proxies.
-    pub min_available_proxies: usize,
+    pub(crate) min_available_proxies: usize,
     /// URL used for health checks.
-    pub health_check_url: String,
+    pub(crate) health_check_url: String,
     /// Number of times to retry a request with different proxies.
-    pub retry_count: usize,
+    pub(crate) retry_count: usize,
     /// Strategy for selecting proxies.
-    pub selection_strategy: ProxySelectionStrategy,
+    pub(crate) selection_strategy: ProxySelectionStrategy,
     /// Maximum requests per second per proxy.
-    pub max_requests_per_second: f64,
+    pub(crate) max_requests_per_second: f64,
+    /// Response classifier for business-level proxy health feedback.
+    pub(crate) response_classifier: Arc<dyn ResponseClassifier>,
+    /// Accept invalid TLS certificates (needed for most free SOCKS5 proxies).
+    pub(crate) danger_accept_invalid_certs: bool,
+}
+
+impl fmt::Debug for ProxyPoolConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProxyPoolConfig")
+            .field("sources", &self.sources)
+            .field("health_check_interval", &self.health_check_interval)
+            .field("health_check_timeout", &self.health_check_timeout)
+            .field("min_available_proxies", &self.min_available_proxies)
+            .field("health_check_url", &self.health_check_url)
+            .field("retry_count", &self.retry_count)
+            .field("selection_strategy", &self.selection_strategy)
+            .field("max_requests_per_second", &self.max_requests_per_second)
+            .field("response_classifier", &"<dyn ResponseClassifier>")
+            .field(
+                "danger_accept_invalid_certs",
+                &self.danger_accept_invalid_certs,
+            )
+            .finish()
+    }
 }
 
 impl ProxyPoolConfig {
     /// Create a new configuration builder.
     pub fn builder() -> ProxyPoolConfigBuilder {
         ProxyPoolConfigBuilder::new()
+    }
+
+    /// Source URLs to fetch proxy lists from.
+    pub fn sources(&self) -> &[String] {
+        &self.sources
+    }
+
+    /// Interval between health checks.
+    pub fn health_check_interval(&self) -> Duration {
+        self.health_check_interval
+    }
+
+    /// Timeout for health checks.
+    pub fn health_check_timeout(&self) -> Duration {
+        self.health_check_timeout
+    }
+
+    /// Minimum number of available proxies.
+    pub fn min_available_proxies(&self) -> usize {
+        self.min_available_proxies
+    }
+
+    /// URL used for health checks.
+    pub fn health_check_url(&self) -> &str {
+        &self.health_check_url
+    }
+
+    /// Number of times to retry a request with different proxies.
+    pub fn retry_count(&self) -> usize {
+        self.retry_count
+    }
+
+    /// Strategy for selecting proxies.
+    pub fn selection_strategy(&self) -> ProxySelectionStrategy {
+        self.selection_strategy
+    }
+
+    /// Maximum requests per second per proxy.
+    pub fn max_requests_per_second(&self) -> f64 {
+        self.max_requests_per_second
+    }
+
+    /// Response classifier for business-level proxy health feedback.
+    pub fn response_classifier(&self) -> &Arc<dyn ResponseClassifier> {
+        &self.response_classifier
+    }
+
+    /// Whether invalid TLS certificates are accepted when connecting through proxies.
+    pub fn danger_accept_invalid_certs(&self) -> bool {
+        self.danger_accept_invalid_certs
     }
 }
 
@@ -53,6 +130,8 @@ pub struct ProxyPoolConfigBuilder {
     retry_count: Option<usize>,
     selection_strategy: Option<ProxySelectionStrategy>,
     max_requests_per_second: Option<f64>,
+    response_classifier: Option<Arc<dyn ResponseClassifier>>,
+    danger_accept_invalid_certs: bool,
 }
 
 impl ProxyPoolConfigBuilder {
@@ -67,6 +146,8 @@ impl ProxyPoolConfigBuilder {
             retry_count: None,
             selection_strategy: None,
             max_requests_per_second: None,
+            response_classifier: None,
+            danger_accept_invalid_certs: false,
         }
     }
 
@@ -118,6 +199,23 @@ impl ProxyPoolConfigBuilder {
         self
     }
 
+    /// Set a custom response classifier for business-level proxy health feedback.
+    ///
+    /// Use this to detect captchas, anti-bot pages, or other blocking responses
+    /// that pass HTTP-level checks but indicate the proxy is unusable.
+    pub fn response_classifier(mut self, classifier: impl ResponseClassifier) -> Self {
+        self.response_classifier = Some(Arc::new(classifier));
+        self
+    }
+
+    /// Accept invalid TLS certificates when connecting through proxies.
+    /// Required for most free SOCKS5 proxies that perform TLS interception.
+    /// Default: `false`.
+    pub fn danger_accept_invalid_certs(mut self, accept: bool) -> Self {
+        self.danger_accept_invalid_certs = accept;
+        self
+    }
+
     /// Build the configuration.
     pub fn build(self) -> ProxyPoolConfig {
         ProxyPoolConfig {
@@ -135,6 +233,10 @@ impl ProxyPoolConfigBuilder {
                 .selection_strategy
                 .unwrap_or(ProxySelectionStrategy::FastestResponse),
             max_requests_per_second: self.max_requests_per_second.unwrap_or(5.0),
+            response_classifier: self
+                .response_classifier
+                .unwrap_or_else(|| Arc::new(DefaultResponseClassifier)),
+            danger_accept_invalid_certs: self.danger_accept_invalid_certs,
         }
     }
 }

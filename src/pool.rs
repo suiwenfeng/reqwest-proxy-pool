@@ -119,14 +119,21 @@ impl ProxyPool {
             let proxy_url = proxy.url.clone();
             let check_url = self.config.health_check_url.clone();
             let timeout = self.config.health_check_timeout;
+            let accept_invalid_certs = self.config.danger_accept_invalid_certs;
 
             let future = async move {
                 let start = Instant::now();
 
                 // Create a client using this proxy
+                let reqwest_proxy = match proxy.to_reqwest_proxy() {
+                    Ok(proxy) => proxy,
+                    Err(_) => return (proxy_url, false, None),
+                };
+
                 let proxy_client = match reqwest::Client::builder()
                     .timeout(timeout)
-                    .proxy(proxy.to_reqwest_proxy().unwrap())
+                    .danger_accept_invalid_certs(accept_invalid_certs)
+                    .proxy(reqwest_proxy)
                     .build()
                 {
                     Ok(client) => client,

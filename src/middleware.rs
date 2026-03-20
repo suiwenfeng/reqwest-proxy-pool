@@ -1,5 +1,6 @@
 //! Middleware implementation for reqwest.
 
+use crate::classifier::ProxyResponseVerdict;
 use crate::config::ProxyPoolConfig;
 use crate::error::NoProxyAvailable;
 use crate::pool::ProxyPool;
@@ -88,6 +89,7 @@ impl Middleware for ProxyPoolMiddleware {
                     let client = match reqwest::Client::builder()
                         .proxy(reqwest_proxy)
                         .timeout(self.pool.config.health_check_timeout)
+                        .danger_accept_invalid_certs(self.pool.config.danger_accept_invalid_certs)
                         .build()
                     {
                         Ok(c) => c,
@@ -105,9 +107,28 @@ impl Middleware for ProxyPoolMiddleware {
                     // Execute the request and pass extensions
                     match client.execute(proxied_request).await {
                         Ok(response) => {
-                            // Request succeeded
-                            self.pool.report_proxy_success(&proxy_url);
-                            return Ok(response);
+                            match self.pool.config.response_classifier.classify(&response) {
+                                ProxyResponseVerdict::Success => {
+                                    self.pool.report_proxy_success(&proxy_url);
+                                    return Ok(response);
+                                }
+                                ProxyResponseVerdict::ProxyBlocked => {
+                                    warn!(
+                                        "Proxy {} blocked by target site (attempt {})",
+                                        proxy_url,
+                                        retry_count + 1
+                                    );
+                                    self.pool.report_proxy_failure(&proxy_url);
+                                    retry_count += 1;
+                                    if retry_count > max_retries {
+                                        return Ok(response);
+                                    }
+                                    // retry with another proxy
+                                }
+                                ProxyResponseVerdict::Passthrough => {
+                                    return Ok(response);
+                                }
+                            }
                         }
                         Err(err) => {
                             // Request failed
