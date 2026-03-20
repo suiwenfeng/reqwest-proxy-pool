@@ -1,5 +1,8 @@
 //! Configuration for the proxy pool.
 
+use crate::classifier::{DefaultResponseClassifier, ResponseClassifier};
+use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Strategy for selecting a proxy from the pool.
@@ -16,7 +19,7 @@ pub enum ProxySelectionStrategy {
 }
 
 /// Configuration for the proxy pool.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProxyPoolConfig {
     /// Source URLs to fetch proxy lists from.
     pub sources: Vec<String>,
@@ -34,6 +37,30 @@ pub struct ProxyPoolConfig {
     pub selection_strategy: ProxySelectionStrategy,
     /// Maximum requests per second per proxy.
     pub max_requests_per_second: f64,
+    /// Response classifier for business-level proxy health feedback.
+    pub response_classifier: Arc<dyn ResponseClassifier>,
+    /// Accept invalid TLS certificates (needed for most free SOCKS5 proxies).
+    pub danger_accept_invalid_certs: bool,
+}
+
+impl fmt::Debug for ProxyPoolConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProxyPoolConfig")
+            .field("sources", &self.sources)
+            .field("health_check_interval", &self.health_check_interval)
+            .field("health_check_timeout", &self.health_check_timeout)
+            .field("min_available_proxies", &self.min_available_proxies)
+            .field("health_check_url", &self.health_check_url)
+            .field("retry_count", &self.retry_count)
+            .field("selection_strategy", &self.selection_strategy)
+            .field("max_requests_per_second", &self.max_requests_per_second)
+            .field("response_classifier", &"<dyn ResponseClassifier>")
+            .field(
+                "danger_accept_invalid_certs",
+                &self.danger_accept_invalid_certs,
+            )
+            .finish()
+    }
 }
 
 impl ProxyPoolConfig {
@@ -53,6 +80,8 @@ pub struct ProxyPoolConfigBuilder {
     retry_count: Option<usize>,
     selection_strategy: Option<ProxySelectionStrategy>,
     max_requests_per_second: Option<f64>,
+    response_classifier: Option<Arc<dyn ResponseClassifier>>,
+    danger_accept_invalid_certs: bool,
 }
 
 impl ProxyPoolConfigBuilder {
@@ -67,6 +96,8 @@ impl ProxyPoolConfigBuilder {
             retry_count: None,
             selection_strategy: None,
             max_requests_per_second: None,
+            response_classifier: None,
+            danger_accept_invalid_certs: false,
         }
     }
 
@@ -118,6 +149,23 @@ impl ProxyPoolConfigBuilder {
         self
     }
 
+    /// Set a custom response classifier for business-level proxy health feedback.
+    ///
+    /// Use this to detect captchas, anti-bot pages, or other blocking responses
+    /// that pass HTTP-level checks but indicate the proxy is unusable.
+    pub fn response_classifier(mut self, classifier: impl ResponseClassifier) -> Self {
+        self.response_classifier = Some(Arc::new(classifier));
+        self
+    }
+
+    /// Accept invalid TLS certificates when connecting through proxies.
+    /// Required for most free SOCKS5 proxies that perform TLS interception.
+    /// Default: `false`.
+    pub fn danger_accept_invalid_certs(mut self, accept: bool) -> Self {
+        self.danger_accept_invalid_certs = accept;
+        self
+    }
+
     /// Build the configuration.
     pub fn build(self) -> ProxyPoolConfig {
         ProxyPoolConfig {
@@ -135,6 +183,10 @@ impl ProxyPoolConfigBuilder {
                 .selection_strategy
                 .unwrap_or(ProxySelectionStrategy::FastestResponse),
             max_requests_per_second: self.max_requests_per_second.unwrap_or(5.0),
+            response_classifier: self
+                .response_classifier
+                .unwrap_or_else(|| Arc::new(DefaultResponseClassifier)),
+            danger_accept_invalid_certs: self.danger_accept_invalid_certs,
         }
     }
 }

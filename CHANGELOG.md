@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Todo]
 - support caching request body
 
+## [0.1.6] - 2026-03-20
+### Added
+- `ResponseClassifier` trait and `ProxyResponseVerdict` enum for business-level proxy health feedback (anti-bot/captcha detection)
+- `response_classifier` option in `ProxyPoolConfig` builder
+- Middleware automatically retries with another proxy when classifier returns `ProxyBlocked`
+- `DefaultResponseClassifier` as default (HTTP success = Success, otherwise Passthrough)
+- `danger_accept_invalid_certs` option for free SOCKS5 proxies that perform TLS interception
+- GitHub Actions workflow for automatic crates.io publish on PR merge to main
+### Changed
+- Support parsing `socks5h://` proxy addresses (remote DNS resolution)
+- Health check now accepts invalid TLS certificates (only tests connectivity)
+- Updated example to demonstrate `ResponseClassifier` usage
+### Fixed
+- Health check no longer panics on invalid proxy URL (safe error handling)
+- Proxy list parser no longer misidentifies non-SOCKS protocols as plain host:port
+
 ## [0.1.5] - 2026-03-18
 ### Changed
 - Upgrade `reqwest` 0.12 → 0.13 (switches default TLS to rustls, adds HTTP/3 support)
