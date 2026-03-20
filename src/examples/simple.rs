@@ -24,8 +24,6 @@ impl ResponseClassifier for CaptchaDetector {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
-
     println!("Initializing proxy pool...");
 
     let config = ProxyPoolConfig::builder()
