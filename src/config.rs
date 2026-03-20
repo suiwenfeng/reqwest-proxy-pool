@@ -22,25 +22,25 @@ pub enum ProxySelectionStrategy {
 #[derive(Clone)]
 pub struct ProxyPoolConfig {
     /// Source URLs to fetch proxy lists from.
-    pub sources: Vec<String>,
+    pub(crate) sources: Vec<String>,
     /// Interval between health checks.
-    pub health_check_interval: Duration,
+    pub(crate) health_check_interval: Duration,
     /// Timeout for health checks.
-    pub health_check_timeout: Duration,
+    pub(crate) health_check_timeout: Duration,
     /// Minimum number of available proxies.
-    pub min_available_proxies: usize,
+    pub(crate) min_available_proxies: usize,
     /// URL used for health checks.
-    pub health_check_url: String,
+    pub(crate) health_check_url: String,
     /// Number of times to retry a request with different proxies.
-    pub retry_count: usize,
+    pub(crate) retry_count: usize,
     /// Strategy for selecting proxies.
-    pub selection_strategy: ProxySelectionStrategy,
+    pub(crate) selection_strategy: ProxySelectionStrategy,
     /// Maximum requests per second per proxy.
-    pub max_requests_per_second: f64,
+    pub(crate) max_requests_per_second: f64,
     /// Response classifier for business-level proxy health feedback.
-    pub response_classifier: Arc<dyn ResponseClassifier>,
+    pub(crate) response_classifier: Arc<dyn ResponseClassifier>,
     /// Accept invalid TLS certificates (needed for most free SOCKS5 proxies).
-    pub danger_accept_invalid_certs: bool,
+    pub(crate) danger_accept_invalid_certs: bool,
 }
 
 impl fmt::Debug for ProxyPoolConfig {
@@ -67,6 +67,56 @@ impl ProxyPoolConfig {
     /// Create a new configuration builder.
     pub fn builder() -> ProxyPoolConfigBuilder {
         ProxyPoolConfigBuilder::new()
+    }
+
+    /// Source URLs to fetch proxy lists from.
+    pub fn sources(&self) -> &[String] {
+        &self.sources
+    }
+
+    /// Interval between health checks.
+    pub fn health_check_interval(&self) -> Duration {
+        self.health_check_interval
+    }
+
+    /// Timeout for health checks.
+    pub fn health_check_timeout(&self) -> Duration {
+        self.health_check_timeout
+    }
+
+    /// Minimum number of available proxies.
+    pub fn min_available_proxies(&self) -> usize {
+        self.min_available_proxies
+    }
+
+    /// URL used for health checks.
+    pub fn health_check_url(&self) -> &str {
+        &self.health_check_url
+    }
+
+    /// Number of times to retry a request with different proxies.
+    pub fn retry_count(&self) -> usize {
+        self.retry_count
+    }
+
+    /// Strategy for selecting proxies.
+    pub fn selection_strategy(&self) -> ProxySelectionStrategy {
+        self.selection_strategy
+    }
+
+    /// Maximum requests per second per proxy.
+    pub fn max_requests_per_second(&self) -> f64 {
+        self.max_requests_per_second
+    }
+
+    /// Response classifier for business-level proxy health feedback.
+    pub fn response_classifier(&self) -> &Arc<dyn ResponseClassifier> {
+        &self.response_classifier
+    }
+
+    /// Whether invalid TLS certificates are accepted when connecting through proxies.
+    pub fn danger_accept_invalid_certs(&self) -> bool {
+        self.danger_accept_invalid_certs
     }
 }
 

@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Todo]
 - support caching request body
 
-## [0.1.6] - 2026-03-20
+## [0.2.0] - 2026-03-20
 ### Added
 - `ResponseClassifier` trait and `ProxyResponseVerdict` enum for business-level proxy health feedback (anti-bot/captcha detection)
 - `response_classifier` option in `ProxyPoolConfig` builder
@@ -16,12 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `danger_accept_invalid_certs` option for free SOCKS5 proxies that perform TLS interception
 - GitHub Actions workflow for automatic crates.io publish on PR merge to main
 ### Changed
+- **Breaking:** `ProxyPoolConfig` fields are now crate-private; construct via `ProxyPoolConfig::builder()` and read via getters.
 - Support parsing `socks5h://` proxy addresses (remote DNS resolution)
 - Health check now accepts invalid TLS certificates (only tests connectivity)
 - Updated example to demonstrate `ResponseClassifier` usage
 ### Fixed
 - Health check no longer panics on invalid proxy URL (safe error handling)
 - Proxy list parser no longer misidentifies non-SOCKS protocols as plain host:port
+### Migration
+- Replace direct struct-literal construction with `ProxyPoolConfig::builder()...build()`.
 
 ## [0.1.5] - 2026-03-18
 ### Changed
