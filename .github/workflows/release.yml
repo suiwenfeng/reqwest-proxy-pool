@@ -44,11 +44,8 @@ jobs:
 
       - name: Publish
         if: steps.version.outputs.changed == 'true'
-        run: cargo publish --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
-
-      - name: Create GitHub Release
-        if: steps.version.outputs.changed == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.version.outputs.current }}
-          generate_release_notes: true
+        run: |
+          output=$(cargo publish --token "${{ secrets.CARGO_REGISTRY_TOKEN }}" 2>&1) && echo "$output" || {
+            echo "$output"
+            echo "$output" | grep -q "already uploaded" && echo "Version already published, skipping." || exit 1
+          }
