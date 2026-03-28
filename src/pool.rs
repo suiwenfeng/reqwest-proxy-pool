@@ -140,7 +140,6 @@ impl ProxyPool {
             let proxy_url = proxy.url.clone();
             let check_url = self.config.health_check_url.clone();
             let timeout = self.config.health_check_timeout;
-            let accept_invalid_certs = self.config.danger_accept_invalid_certs;
 
             let future = async move {
                 let start = Instant::now();
@@ -153,7 +152,7 @@ impl ProxyPool {
 
                 let proxy_client = match reqwest::Client::builder()
                     .timeout(timeout)
-                    .danger_accept_invalid_certs(accept_invalid_certs)
+                    .danger_accept_invalid_certs(true)
                     .proxy(reqwest_proxy)
                     .build()
                 {
@@ -191,9 +190,11 @@ impl ProxyPool {
                     if is_healthy {
                         proxy.status = ProxyStatus::Healthy;
                         proxy.response_time = response_time;
+                        proxy.cooldown_until = None;
                         healthy_count += 1;
                     } else {
                         proxy.status = ProxyStatus::Unhealthy;
+                        proxy.cooldown_until = Some(Instant::now() + self.config.proxy_cooldown);
                         unhealthy_count += 1;
                     }
 
@@ -233,12 +234,25 @@ impl ProxyPool {
         &self,
         excluded: Option<&HashSet<String>>,
     ) -> Result<Proxy, NoProxyAvailable> {
-        let proxies = self.proxies.read();
+        let now = Instant::now();
+        let mut proxies = self.proxies.write();
 
-        // Filter healthy proxies
+        // Move cooled-down proxies into half-open so they can be probed by real traffic.
+        for proxy in proxies.iter_mut() {
+            if proxy.status == ProxyStatus::Unhealthy
+                && proxy
+                    .cooldown_until
+                    .is_some_and(|cooldown_until| cooldown_until <= now)
+            {
+                proxy.status = ProxyStatus::HalfOpen;
+                proxy.cooldown_until = None;
+            }
+        }
+
+        // Filter selectable proxies.
         let healthy_proxies: Vec<&Proxy> = proxies
             .iter()
-            .filter(|p| p.status == ProxyStatus::Healthy)
+            .filter(|p| matches!(p.status, ProxyStatus::Healthy | ProxyStatus::HalfOpen))
             .filter(|p| excluded.map(|urls| !urls.contains(&p.url)).unwrap_or(true))
             .collect();
 
@@ -271,17 +285,29 @@ impl ProxyPool {
                     })
                     .unwrap()
             }
+            ProxySelectionStrategy::TopKReliableRandom => {
+                let mut ranked = healthy_proxies;
+                ranked.sort_by(|a, b| {
+                    b.success_rate()
+                        .partial_cmp(&a.success_rate())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let top_k = self.config.reliable_top_k.min(ranked.len()).max(1);
+                let mut rng = rand::rng();
+                let idx = rng.random_range(0..top_k);
+                ranked[idx]
+            }
             ProxySelectionStrategy::Random => {
                 // Select a random healthy proxy
                 let mut rng = rand::rng();
                 let idx = rng.random_range(0..healthy_proxies.len());
-                &healthy_proxies[idx]
+                healthy_proxies[idx]
             }
             ProxySelectionStrategy::RoundRobin => {
                 // Round-robin selection
                 let mut last_index = self.last_proxy_index.lock();
                 *last_index = (*last_index + 1) % healthy_proxies.len();
-                &healthy_proxies[*last_index]
+                healthy_proxies[*last_index]
             }
         };
 
@@ -294,6 +320,7 @@ impl ProxyPool {
         if let Some(proxy) = proxies.iter_mut().find(|p| p.url == url) {
             proxy.success_count += 1;
             proxy.status = ProxyStatus::Healthy;
+            proxy.cooldown_until = None;
         }
     }
 
@@ -302,21 +329,15 @@ impl ProxyPool {
         let mut proxies = self.proxies.write();
         if let Some(proxy) = proxies.iter_mut().find(|p| p.url == url) {
             proxy.failure_count += 1;
+            let old_status = proxy.status;
+            proxy.status = ProxyStatus::Unhealthy;
+            proxy.cooldown_until = Some(Instant::now() + self.config.proxy_cooldown);
 
-            // Mark as unhealthy if failure ratio is too high
-            let failure_ratio =
-                proxy.failure_count as f64 / (proxy.success_count + proxy.failure_count) as f64;
-
-            if failure_ratio > 0.5 && proxy.failure_count >= 3 {
-                let old_status = proxy.status;
-                proxy.status = ProxyStatus::Unhealthy;
-
-                if old_status != ProxyStatus::Unhealthy {
-                    warn!(
-                        "Proxy {} marked unhealthy: {} failures, {} successes",
-                        proxy.url, proxy.failure_count, proxy.success_count
-                    );
-                }
+            if old_status != ProxyStatus::Unhealthy {
+                warn!(
+                    "Proxy {} marked unhealthy: {} failures, {} successes, cooldown {:?}",
+                    proxy.url, proxy.failure_count, proxy.success_count, self.config.proxy_cooldown
+                );
             }
         }
     }
@@ -327,7 +348,7 @@ impl ProxyPool {
         let total = proxies.len();
         let healthy = proxies
             .iter()
-            .filter(|p| p.status == ProxyStatus::Healthy)
+            .filter(|p| matches!(p.status, ProxyStatus::Healthy | ProxyStatus::HalfOpen))
             .count();
 
         (total, healthy)

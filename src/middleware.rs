@@ -1,13 +1,15 @@
 //! Middleware implementation for reqwest.
 
-use crate::classifier::ProxyResponseVerdict;
-use crate::config::{HostConfig, ProxyPoolConfig, RetryStrategy};
+use crate::classifier::ProxyBodyVerdict;
+use crate::config::{ClientBuilderFactory, HostConfig, ProxyPoolConfig, RetryStrategy};
 use crate::error::NoProxyAvailable;
 use crate::pool::ProxyPool;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use log::{info, warn};
+use parking_lot::RwLock;
+use reqwest::ResponseBuilderExt;
 use reqwest_middleware::{Error, Middleware, Next, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -19,6 +21,10 @@ pub struct ProxyPoolMiddleware {
     pools: HashMap<String, Arc<ProxyPool>>,
     /// Primary pool used for unknown hosts.
     primary_host: String,
+    /// Factory used to create request clients before attaching proxy.
+    client_builder_factory: ClientBuilderFactory,
+    /// Built client cache keyed by proxy URL.
+    client_cache: Arc<RwLock<HashMap<String, reqwest::Client>>>,
 }
 
 impl ProxyPoolMiddleware {
@@ -37,6 +43,7 @@ impl ProxyPoolMiddleware {
 
         let primary_host = validate_hosts(config.hosts())?;
 
+        let client_builder_factory = Arc::clone(config.client_builder_factory());
         let mut pools = HashMap::new();
         for host_config in config.hosts().iter().cloned() {
             let host = host_config.host().to_ascii_lowercase();
@@ -58,6 +65,8 @@ impl ProxyPoolMiddleware {
         Ok(Self {
             pools,
             primary_host,
+            client_builder_factory,
+            client_cache: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -69,6 +78,26 @@ impl ProxyPoolMiddleware {
             }
         }
         self.pools.get(&self.primary_host).map(Arc::clone)
+    }
+
+    fn get_or_build_client(
+        &self,
+        proxy_url: &str,
+        reqwest_proxy: reqwest::Proxy,
+    ) -> std::result::Result<reqwest::Client, reqwest::Error> {
+        if let Some(existing) = self.client_cache.read().get(proxy_url).cloned() {
+            return Ok(existing);
+        }
+
+        let built = (self.client_builder_factory)()
+            .proxy(reqwest_proxy)
+            .build()?;
+
+        let mut cache = self.client_cache.write();
+        let cached = cache
+            .entry(proxy_url.to_string())
+            .or_insert_with(|| built.clone());
+        Ok(cached.clone())
     }
 }
 
@@ -202,12 +231,7 @@ impl Middleware for ProxyPoolMiddleware {
                         }
                     };
 
-                    let client = match reqwest::Client::builder()
-                        .proxy(reqwest_proxy)
-                        .timeout(pool.config.health_check_timeout)
-                        .danger_accept_invalid_certs(pool.config.danger_accept_invalid_certs)
-                        .build()
-                    {
+                    let client = match self.get_or_build_client(&proxy_url, reqwest_proxy) {
                         Ok(c) => c,
                         Err(e) => {
                             warn!("Failed to build client with proxy {}: {}", proxy_url, e);
@@ -221,27 +245,66 @@ impl Middleware for ProxyPoolMiddleware {
                     };
 
                     match client.execute(proxied_request).await {
-                        Ok(response) => match pool.config.response_classifier.classify(&response) {
-                            ProxyResponseVerdict::Success => {
-                                pool.report_proxy_success(&proxy_url);
-                                return Ok(response);
-                            }
-                            ProxyResponseVerdict::ProxyBlocked => {
-                                warn!(
-                                    "Proxy {} blocked by target site (attempt {})",
-                                    proxy_url,
-                                    retry_count + 1
-                                );
-                                pool.report_proxy_failure(&proxy_url);
-                                retry_count += 1;
-                                if retry_count > max_retries {
-                                    return Ok(response);
+                        Ok(response) => {
+                            let status = response.status();
+                            let version = response.version();
+                            let headers = response.headers().clone();
+                            let url = response.url().clone();
+
+                            let body = match response.bytes().await {
+                                Ok(body) => body,
+                                Err(err) => {
+                                    warn!(
+                                        "Read body failed with proxy {} (attempt {}): {}",
+                                        proxy_url,
+                                        retry_count + 1,
+                                        err
+                                    );
+                                    pool.report_proxy_failure(&proxy_url);
+                                    retry_count += 1;
+                                    if retry_count > max_retries {
+                                        return Err(Error::Reqwest(err));
+                                    }
+                                    continue;
+                                }
+                            };
+
+                            let verdict = pool.config.body_classifier.classify(
+                                status,
+                                &headers,
+                                body.as_ref(),
+                            );
+                            let rebuilt =
+                                rebuild_response(status, version, headers, url, body.to_vec())
+                                    .map_err(|e| {
+                                        Error::Middleware(anyhow!(
+                                        "Failed to rebuild response after body classification: {}",
+                                        e
+                                    ))
+                                    })?;
+
+                            match verdict {
+                                ProxyBodyVerdict::Success => {
+                                    pool.report_proxy_success(&proxy_url);
+                                    return Ok(rebuilt);
+                                }
+                                ProxyBodyVerdict::ProxyBlocked => {
+                                    warn!(
+                                        "Proxy {} blocked by target site (attempt {})",
+                                        proxy_url,
+                                        retry_count + 1
+                                    );
+                                    pool.report_proxy_failure(&proxy_url);
+                                    retry_count += 1;
+                                    if retry_count > max_retries {
+                                        return Ok(rebuilt);
+                                    }
+                                }
+                                ProxyBodyVerdict::Passthrough => {
+                                    return Ok(rebuilt);
                                 }
                             }
-                            ProxyResponseVerdict::Passthrough => {
-                                return Ok(response);
-                            }
-                        },
+                        }
                         Err(err) => {
                             warn!(
                                 "Request failed with proxy {} (attempt {}): {}",
@@ -268,4 +331,22 @@ impl Middleware for ProxyPoolMiddleware {
             }
         }
     }
+}
+
+fn rebuild_response(
+    status: reqwest::StatusCode,
+    version: reqwest::Version,
+    headers: reqwest::header::HeaderMap,
+    url: reqwest::Url,
+    body: Vec<u8>,
+) -> std::result::Result<reqwest::Response, http::Error> {
+    let mut builder = http::Response::builder()
+        .status(status)
+        .version(version)
+        .url(url);
+    if let Some(headers_mut) = builder.headers_mut() {
+        *headers_mut = headers;
+    }
+    let http_response = builder.body(body)?;
+    Ok(reqwest::Response::from(http_response))
 }
