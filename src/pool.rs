@@ -1,6 +1,6 @@
 //! Core proxy pool implementation.
 
-use crate::config::{ProxyPoolConfig, ProxySelectionStrategy};
+use crate::config::{HostConfig, ProxySelectionStrategy};
 use crate::error::NoProxyAvailable;
 use crate::proxy::{Proxy, ProxyStatus};
 use crate::utils;
@@ -16,10 +16,12 @@ use tokio::time::{self};
 
 /// A pool of proxies that can be used for HTTP requests.
 pub struct ProxyPool {
+    /// Source URLs to fetch proxy lists from.
+    sources: Vec<String>,
     /// All proxies in the pool.
     proxies: RwLock<Vec<Proxy>>,
-    /// Configuration for the pool.
-    pub config: ProxyPoolConfig,
+    /// Host-level configuration for the pool.
+    pub config: HostConfig,
     /// Used for round-robin proxy selection.
     last_proxy_index: Mutex<usize>,
 }
@@ -27,8 +29,12 @@ pub struct ProxyPool {
 impl ProxyPool {
     /// Create a new proxy pool with the given configuration.
     /// This will fetch proxies from sources and perform health checks synchronously.
-    pub async fn new(config: ProxyPoolConfig) -> Result<Arc<Self>, reqwest::Error> {
+    pub async fn new(
+        sources: Vec<String>,
+        config: HostConfig,
+    ) -> Result<Arc<Self>, reqwest::Error> {
         let pool = Arc::new(Self {
+            sources,
             proxies: RwLock::new(Vec::new()),
             config,
             last_proxy_index: Mutex::new(0),
@@ -47,6 +53,14 @@ impl ProxyPool {
             "Initial proxy pool status: {}/{} healthy proxies",
             healthy, total
         );
+        if healthy < pool.config.min_available_proxies {
+            warn!(
+                "Healthy proxies below minimum for host [{}]: {} < {}",
+                pool.config.host(),
+                healthy,
+                pool.config.min_available_proxies
+            );
+        }
 
         // Start background health check task
         let pool_clone = Arc::clone(&pool);
@@ -60,6 +74,14 @@ impl ProxyPool {
                     "Proxy pool status update: {}/{} healthy proxies",
                     healthy, total
                 );
+                if healthy < pool_clone.config.min_available_proxies {
+                    warn!(
+                        "Healthy proxies below minimum for host [{}]: {} < {}",
+                        pool_clone.config.host(),
+                        healthy,
+                        pool_clone.config.min_available_proxies
+                    );
+                }
             }
         });
 
@@ -70,13 +92,13 @@ impl ProxyPool {
     async fn initialize_proxies(&self) -> Result<(), reqwest::Error> {
         info!(
             "Initializing proxy pool from {} sources",
-            self.config.sources.len()
+            self.sources.len()
         );
 
         let mut all_proxies = HashSet::new();
 
         // Fetch proxies from each source
-        for source in &self.config.sources {
+        for source in &self.sources {
             match utils::fetch_proxies_from_source(source).await {
                 Ok(source_proxies) => {
                     info!("Fetched {} proxies from {}", source_proxies.len(), source);
@@ -97,7 +119,7 @@ impl ProxyPool {
         {
             let mut proxies = self.proxies.write();
             for url in all_proxies {
-                proxies.push(Proxy::new(url, self.config.max_requests_per_second));
+                proxies.push(Proxy::new(url, self.config.min_request_interval_ms));
             }
         }
 
@@ -112,7 +134,6 @@ impl ProxyPool {
             let guard = self.proxies.read();
             guard.clone()
         };
-
         let mut futures = Vec::new();
 
         for proxy in &proxies {
@@ -140,7 +161,7 @@ impl ProxyPool {
                     Err(_) => return (proxy_url, false, None),
                 };
 
-                // Test the proxy
+                // Test the proxy.
                 match proxy_client.get(&check_url).send().await {
                     Ok(resp) if resp.status().is_success() => {
                         let elapsed = start.elapsed().as_secs_f64();
@@ -197,12 +218,28 @@ impl ProxyPool {
 
     /// Get a proxy from the pool according to the configured selection strategy.
     pub fn get_proxy(&self) -> Result<Proxy, NoProxyAvailable> {
+        self.get_proxy_internal(None)
+    }
+
+    /// Get a proxy while excluding specific proxy URLs.
+    pub fn get_proxy_excluding(
+        &self,
+        excluded: &HashSet<String>,
+    ) -> Result<Proxy, NoProxyAvailable> {
+        self.get_proxy_internal(Some(excluded))
+    }
+
+    fn get_proxy_internal(
+        &self,
+        excluded: Option<&HashSet<String>>,
+    ) -> Result<Proxy, NoProxyAvailable> {
         let proxies = self.proxies.read();
 
         // Filter healthy proxies
         let healthy_proxies: Vec<&Proxy> = proxies
             .iter()
             .filter(|p| p.status == ProxyStatus::Healthy)
+            .filter(|p| excluded.map(|urls| !urls.contains(&p.url)).unwrap_or(true))
             .collect();
 
         if healthy_proxies.is_empty() {

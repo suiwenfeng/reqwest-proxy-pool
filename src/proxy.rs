@@ -8,7 +8,7 @@ use governor::{
 };
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Status of a proxy.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -36,17 +36,18 @@ pub struct Proxy {
     pub last_check: Instant,
     /// Average response time in seconds, if available.
     pub response_time: Option<f64>,
-    /// Rate limiter to control requests per second.
+    /// Rate limiter to enforce minimum interval between requests.
     pub limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock, NoOpMiddleware>>,
 }
 
 impl Proxy {
     /// Create a new proxy with the given URL and rate limit.
-    pub fn new(url: String, max_rps: f64) -> Self {
-        // Create a rate limiter for this proxy
-        let quota = Quota::per_second(
-            NonZeroU32::new(max_rps.ceil() as u32).unwrap_or(NonZeroU32::new(1).unwrap()),
-        );
+    pub fn new(url: String, min_request_interval_ms: u64) -> Self {
+        // Create a rate limiter for this proxy (1 request per interval).
+        let period = Duration::from_millis(min_request_interval_ms.max(1));
+        let quota = Quota::with_period(period)
+            .unwrap_or_else(|| Quota::per_second(NonZeroU32::new(1).unwrap()))
+            .allow_burst(NonZeroU32::new(1).unwrap());
         let limiter = Arc::new(RateLimiter::direct(quota));
 
         Self {

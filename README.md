@@ -12,13 +12,14 @@ Proxy pool middleware implementation for [`reqwest-middleware`](https://crates.i
 ### ✨ Comprehensive Proxy Support
 
 - Automatic parsing of free SOCKS5/SOCKS5H proxies from multiple sources
-- Built-in health checking with customizable timeout and test URL
+- Per-host proxy pools with independent health-check policies
 
 ### ⚡ Intelligent Proxy Management
 
-- Multiple proxy selection strategies (FastestResponse, RoundRobin, Random)
-- Per-proxy rate limiting to avoid bans
+- Multiple proxy selection strategies (FastestResponse, MostReliable, RoundRobin, Random)
+- Per-proxy minimum request interval to avoid bans
 - Automatic retry mechanism for failed requests
+- Retry strategy control (`DefaultSelection` / `NewProxyOnRetry`)
 - Custom response classifier for business-level proxy health (anti-bot/captcha detection)
 
 ### 🔧 Easy Configuration
@@ -35,7 +36,7 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 reqwest = "0.13"
-reqwest-proxy-pool = "0.2"
+reqwest-proxy-pool = "0.3"
 reqwest-middleware = "0.5"
 tokio = { version = "1", features = ["full"] }
 ```
@@ -45,8 +46,8 @@ tokio = { version = "1", features = ["full"] }
 ```rust
 use reqwest_middleware::ClientBuilder;
 use reqwest_proxy_pool::{
-    ProxyPoolConfig, ProxyPoolMiddleware, ProxyResponseVerdict, ProxySelectionStrategy,
-    ResponseClassifier,
+    HostConfig, ProxyPoolConfig, ProxyPoolMiddleware, ProxyResponseVerdict,
+    ProxySelectionStrategy, ResponseClassifier, RetryStrategy,
 };
 use std::time::Duration;
 
@@ -64,18 +65,33 @@ impl ResponseClassifier for CaptchaDetector {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let api_host = HostConfig::builder("httpbin.org")
+        .primary(true)
+        .health_check_timeout(Duration::from_secs(5))
+        .health_check_url("https://httpbin.org/ip")
+        .retry_count(2)
+        .retry_strategy(RetryStrategy::NewProxyOnRetry)
+        .selection_strategy(ProxySelectionStrategy::FastestResponse)
+        .min_request_interval_ms(500)
+        .response_classifier(CaptchaDetector)
+        .danger_accept_invalid_certs(true)
+        .build();
+
+    let static_host = HostConfig::builder("example.com")
+        .health_check_url("https://example.com")
+        .retry_count(1)
+        .selection_strategy(ProxySelectionStrategy::Random)
+        .min_request_interval_ms(800)
+        .build();
+
     let config = ProxyPoolConfig::builder()
+        // Shared proxy source list for all host pools.
         .sources(vec![
             "https://cdn.jsdelivr.net/gh/dpangestuw/Free-Proxy@main/socks5_proxies.txt",
             "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/socks5/data.txt",
         ])
-        .health_check_timeout(Duration::from_secs(5))
-        .health_check_url("https://httpbin.org/ip")
-        .retry_count(2)
-        .selection_strategy(ProxySelectionStrategy::FastestResponse)
-        .max_requests_per_second(3.0)
-        .response_classifier(CaptchaDetector)
-        .danger_accept_invalid_certs(true)
+        // One host config = one dedicated pool.
+        .hosts(vec![api_host, static_host])
         .build();
 
     let proxy_pool = ProxyPoolMiddleware::new(config).await?;
@@ -94,18 +110,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Configuration Options
 
-| Option                    | Description                           | Default                    |
-|---------------------------|---------------------------------------|----------------------------|
-| `sources`                 | List of URLs providing proxy lists    | Required                   |
-| `health_check_interval`   | Interval for background health checks | 300s                       |
-| `health_check_timeout`    | Timeout for proxy health checks       | 10s                        |
-| `min_available_proxies`   | Min available proxies                 | 3                          |
-| `health_check_url`        | URL to test proxy health              | `"https://www.google.com"` |
-| `retry_count`             | Number of retries for failed requests | 3                          |
-| `selection_strategy`      | Proxy selection algorithm             | `FastestResponse`          |
-| `max_requests_per_second` | Rate limit per proxy                  | 5.0                        |
-| `response_classifier`     | Custom response classifier for proxy health | `DefaultResponseClassifier` |
+`ProxyPoolConfig`:
+
+| Option         | Description                                                    | Default   |
+|----------------|----------------------------------------------------------------|-----------|
+| `sources`      | List of URLs providing proxy lists (shared by all host pools) | Required  |
+| `hosts`        | List of `HostConfig` (one host = one pool)                    | Required  |
+
+`HostConfig`:
+
+| Option                    | Description                                      | Default                    |
+|---------------------------|--------------------------------------------------|----------------------------|
+| `host`                    | Target host for this pool                        | Required                   |
+| `primary`                 | Whether this host is fallback primary (exactly one must be `true`) | `false`                    |
+| `health_check_interval`   | Interval for background health checks            | 300s                       |
+| `health_check_timeout`    | Timeout for proxy health checks                  | 10s                        |
+| `min_available_proxies`   | Min available proxies                            | 3                          |
+| `health_check_url`        | URL to test proxy health                         | `"https://www.google.com"` |
+| `retry_count`             | Number of retries for failed requests            | 3                          |
+| `retry_strategy`          | Retry behavior                                   | `DefaultSelection`         |
+| `selection_strategy`      | Proxy selection algorithm                        | `FastestResponse`          |
+| `min_request_interval_ms` | Min interval per proxy request                   | 500                        |
+| `response_classifier`     | Custom response classifier for proxy health      | `DefaultResponseClassifier` |
 | `danger_accept_invalid_certs` | Accept invalid TLS certs (needed for most free proxies) | `false` |
+
+### Host-Based Routing (Multiple Pools)
+
+```rust
+use reqwest_proxy_pool::{HostConfig, ProxyPoolConfig, ProxyPoolMiddleware};
+
+let api_host = HostConfig::builder("api.example.com").build();
+let web_host = HostConfig::builder("www.example.com").primary(true).build();
+
+let config = ProxyPoolConfig::builder()
+    .sources(vec!["https://example.com/shared-proxies.txt"])
+    .hosts(vec![api_host, web_host])
+    .build();
+
+let middleware = ProxyPoolMiddleware::new(config).await?;
+```
+
+### Routing Rules
+
+1. Request host matches a configured `HostConfig.host` -> use that host pool.
+2. Request host does not match -> use the unique `HostConfig` with `primary(true)`.
+
+`primary=true` is required for exactly one host.
+
+### Migration (0.2 -> 0.3)
+
+- `ProxyPoolConfig` (single pool config) -> split into:
+  - top-level `ProxyPoolConfig { sources, hosts }`
+  - per-host `HostConfig`
+- `max_requests_per_second` -> `min_request_interval_ms`
+- `retry_strategy` added:
+  - `DefaultSelection`: previous behavior
+  - `NewProxyOnRetry`: force different proxy on retries
+
+Example migration:
+
+```rust
+// v0.2
+// ProxyPoolConfig::builder().health_check_url(...).max_requests_per_second(3.0)
+
+// v0.3
+let host = HostConfig::builder("target.example.com")
+    .primary(true)
+    .health_check_url("https://target.example.com/health")
+    .min_request_interval_ms(333)
+    .build();
+let config = ProxyPoolConfig::builder()
+    .sources(vec!["https://.../socks5.txt"])
+    .add_host(host)
+    .build();
+```
 
 ## License
 

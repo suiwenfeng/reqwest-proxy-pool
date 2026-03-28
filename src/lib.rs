@@ -2,8 +2,10 @@
 //!
 //! A SOCKS5/SOCKS5H proxy pool middleware for reqwest.
 //!
-//! This library provides a middleware for reqwest that automatically manages a pool of
-//! SOCKS5 proxies, testing their health, and using them for requests with automatic retries.
+//! This library provides host-based SOCKS5 proxy pools for reqwest middleware:
+//! - one `HostConfig` defines one host-specific proxy pool
+//! - requests are routed by host
+//! - unknown hosts fall back to the unique `primary=true` host pool
 
 pub mod classifier;
 pub mod config;
@@ -14,7 +16,10 @@ pub mod proxy;
 mod utils;
 
 pub use classifier::{DefaultResponseClassifier, ProxyResponseVerdict, ResponseClassifier};
-pub use config::{ProxyPoolConfig, ProxyPoolConfigBuilder, ProxySelectionStrategy};
+pub use config::{
+    HostConfig, HostConfigBuilder, ProxyPoolConfig, ProxyPoolConfigBuilder, ProxySelectionStrategy,
+    RetryStrategy,
+};
 pub use error::NoProxyAvailable;
 pub use middleware::ProxyPoolMiddleware;
 pub use pool::ProxyPool;
