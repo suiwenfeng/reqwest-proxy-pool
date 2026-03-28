@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Todo]
 - support caching request body
 
+## [0.3.0] - 2026-03-28
+### Added
+- `HostConfig` for per-host pool policies (one host = one pool).
+- `RetryStrategy` with `DefaultSelection` and `NewProxyOnRetry`.
+- `primary` flag on `HostConfig` to define fallback pool for unknown hosts.
+- `min_request_interval_ms` to configure per-proxy minimum request interval.
+### Changed
+- **Breaking:** top-level `ProxyPoolConfig` now focuses on shared `sources` and `hosts: Vec<HostConfig>`.
+- **Breaking:** middleware now routes by request host to host-specific pools.
+- Unknown request hosts now always route to the unique `primary=true` host pool.
+- `min_available_proxies` is now actively checked and warns when healthy pool size drops below threshold.
+- README and example updated to new host-centric mental model.
+### Removed
+- **Breaking:** removed single-pool `ProxyPoolConfig` fields (e.g. `health_check_url`, `retry_count`, `selection_strategy`) from top-level config.
+- **Breaking:** removed `max_requests_per_second`; replaced by `min_request_interval_ms`.
+- **Breaking:** removed `default_host`; fallback is now determined by `HostConfig.primary`.
+### Migration
+- Move per-target policy from `ProxyPoolConfig::builder()` into `HostConfig::builder("<host>")`.
+- Keep proxy list source URLs in top-level `ProxyPoolConfig::builder().sources(...)`.
+- Mark exactly one host as `.primary(true)`.
+
 ## [0.2.1] - 2026-03-20
 ### Changed
 - README installation snippet now uses `reqwest-proxy-pool = "0.2"` to match APIs used in examples.
