@@ -1,8 +1,8 @@
-//! Response classification for proxy health feedback.
+//! Body-aware classification for proxy health feedback.
 
-/// Result of classifying a response from a proxy.
+/// Result of classifying a response body from a proxy.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ProxyResponseVerdict {
+pub enum ProxyBodyVerdict {
     /// Response is good. Proxy records a success.
     Success,
     /// Proxy is blocked (e.g. captcha, anti-bot). Records failure, retries with another proxy.
@@ -11,42 +11,56 @@ pub enum ProxyResponseVerdict {
     Passthrough,
 }
 
-/// Classify responses to determine proxy health at the business level.
-///
-/// Implement this trait to detect anti-bot responses (captchas, blocks, etc.)
-/// that pass HTTP-level health checks but indicate the proxy is unusable
-/// for your target site.
+/// Classify responses with full body to determine proxy health at business level.
 ///
 /// # Example
 /// ```rust,no_run
-/// use reqwest_proxy_pool::{ResponseClassifier, ProxyResponseVerdict};
+/// use reqwest_proxy_pool::{BodyClassifier, ProxyBodyVerdict};
 ///
 /// struct CaptchaDetector;
 ///
-/// impl ResponseClassifier for CaptchaDetector {
-///     fn classify(&self, response: &reqwest::Response) -> ProxyResponseVerdict {
-///         // Check status or headers for signs of blocking
-///         if response.status() == 403 {
-///             ProxyResponseVerdict::ProxyBlocked
+/// impl BodyClassifier for CaptchaDetector {
+///     fn classify(
+///         &self,
+///         status: reqwest::StatusCode,
+///         _headers: &reqwest::header::HeaderMap,
+///         body: &[u8],
+///     ) -> ProxyBodyVerdict {
+///         if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+///             || String::from_utf8_lossy(body).contains("captcha")
+///         {
+///             ProxyBodyVerdict::ProxyBlocked
+///         } else if status.is_success() {
+///             ProxyBodyVerdict::Success
 ///         } else {
-///             ProxyResponseVerdict::Success
+///             ProxyBodyVerdict::Passthrough
 ///         }
 ///     }
 /// }
 /// ```
-pub trait ResponseClassifier: Send + Sync + 'static {
-    fn classify(&self, response: &reqwest::Response) -> ProxyResponseVerdict;
+pub trait BodyClassifier: Send + Sync + 'static {
+    fn classify(
+        &self,
+        status: reqwest::StatusCode,
+        headers: &reqwest::header::HeaderMap,
+        body: &[u8],
+    ) -> ProxyBodyVerdict;
 }
 
 /// Default classifier: HTTP success = Success, otherwise Passthrough.
-pub struct DefaultResponseClassifier;
+pub struct DefaultBodyClassifier;
 
-impl ResponseClassifier for DefaultResponseClassifier {
-    fn classify(&self, response: &reqwest::Response) -> ProxyResponseVerdict {
-        if response.status().is_success() {
-            ProxyResponseVerdict::Success
+impl BodyClassifier for DefaultBodyClassifier {
+    fn classify(
+        &self,
+        status: reqwest::StatusCode,
+        _headers: &reqwest::header::HeaderMap,
+        _body: &[u8],
+    ) -> ProxyBodyVerdict {
+        if status.is_success() {
+            ProxyBodyVerdict::Success
         } else {
-            ProxyResponseVerdict::Passthrough
+            ProxyBodyVerdict::Passthrough
         }
     }
 }

@@ -16,11 +16,18 @@ Proxy pool middleware implementation for [`reqwest-middleware`](https://crates.i
 
 ### ⚡ Intelligent Proxy Management
 
-- Multiple proxy selection strategies (FastestResponse, MostReliable, RoundRobin, Random)
+- Multiple proxy selection strategies (FastestResponse, MostReliable, TopKReliableRandom, RoundRobin, Random)
 - Per-proxy minimum request interval to avoid bans
 - Automatic retry mechanism for failed requests
 - Retry strategy control (`DefaultSelection` / `NewProxyOnRetry`)
-- Custom response classifier for business-level proxy health (anti-bot/captcha detection)
+- Custom body classifier for business-level proxy health (anti-bot/captcha detection)
+- Proxy cooldown with half-open probing after failures
+- Reuse built clients via proxy-url cache to reduce rebuild overhead
+
+### 🎯 Stability-First Goal
+
+- Designed to absorb unstable proxy quality (timeouts, handshake errors, intermittent body-read failures) inside the library.
+- Prefer request completion stability over single-attempt latency under noisy proxy pools.
 
 ### 🔧 Easy Configuration
 
@@ -36,7 +43,7 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 reqwest = "0.13"
-reqwest-proxy-pool = "0.3"
+reqwest-proxy-pool = "0.4"
 reqwest-middleware = "0.5"
 tokio = { version = "1", features = ["full"] }
 ```
@@ -46,19 +53,28 @@ tokio = { version = "1", features = ["full"] }
 ```rust
 use reqwest_middleware::ClientBuilder;
 use reqwest_proxy_pool::{
-    HostConfig, ProxyPoolConfig, ProxyPoolMiddleware, ProxyResponseVerdict,
-    ProxySelectionStrategy, ResponseClassifier, RetryStrategy,
+    BodyClassifier, HostConfig, ProxyBodyVerdict, ProxyPoolConfig, ProxyPoolMiddleware,
+    ProxySelectionStrategy, RetryStrategy,
 };
 use std::time::Duration;
 
 struct CaptchaDetector;
 
-impl ResponseClassifier for CaptchaDetector {
-    fn classify(&self, response: &reqwest::Response) -> ProxyResponseVerdict {
-        match response.status().as_u16() {
-            403 | 429 => ProxyResponseVerdict::ProxyBlocked,
-            500..=599 => ProxyResponseVerdict::Passthrough,
-            _ => ProxyResponseVerdict::Success,
+impl BodyClassifier for CaptchaDetector {
+    fn classify(
+        &self,
+        status: reqwest::StatusCode,
+        _headers: &reqwest::header::HeaderMap,
+        body: &[u8],
+    ) -> ProxyBodyVerdict {
+        if matches!(status.as_u16(), 403 | 429)
+            || String::from_utf8_lossy(body).contains("captcha")
+        {
+            ProxyBodyVerdict::ProxyBlocked
+        } else if (500..=599).contains(&status.as_u16()) {
+            ProxyBodyVerdict::Passthrough
+        } else {
+            ProxyBodyVerdict::Success
         }
     }
 }
@@ -71,10 +87,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .health_check_url("https://httpbin.org/ip")
         .retry_count(2)
         .retry_strategy(RetryStrategy::NewProxyOnRetry)
-        .selection_strategy(ProxySelectionStrategy::FastestResponse)
+        .selection_strategy(ProxySelectionStrategy::TopKReliableRandom)
+        .reliable_top_k(8)
         .min_request_interval_ms(500)
-        .response_classifier(CaptchaDetector)
-        .danger_accept_invalid_certs(true)
+        .body_classifier(CaptchaDetector)
+        .proxy_cooldown(Duration::from_secs(30))
         .build();
 
     let static_host = HostConfig::builder("example.com")
@@ -85,6 +102,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     let config = ProxyPoolConfig::builder()
+        .client_builder_factory(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(12))
+                .pool_idle_timeout(Duration::from_secs(30))
+        })
         // Shared proxy source list for all host pools.
         .sources(vec![
             "https://cdn.jsdelivr.net/gh/dpangestuw/Free-Proxy@main/socks5_proxies.txt",
@@ -108,6 +130,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Notes
+
+- For body-aware classification, middleware reads full response body into memory and rebuilds `reqwest::Response` before returning it.
+- This improves failure attribution and retry stability, but increases memory usage for large response bodies.
+
 ### Configuration Options
 
 `ProxyPoolConfig`:
@@ -116,6 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 |----------------|----------------------------------------------------------------|-----------|
 | `sources`      | List of URLs providing proxy lists (shared by all host pools) | Required  |
 | `hosts`        | List of `HostConfig` (one host = one pool)                    | Required  |
+| `client_builder_factory` | Creates request client builder before proxy append     | `reqwest::Client::builder` |
 
 `HostConfig`:
 
@@ -130,9 +158,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `retry_count`             | Number of retries for failed requests            | 3                          |
 | `retry_strategy`          | Retry behavior                                   | `DefaultSelection`         |
 | `selection_strategy`      | Proxy selection algorithm                        | `FastestResponse`          |
+| `reliable_top_k`          | K used by `TopKReliableRandom`                   | 8                          |
+| `proxy_cooldown`          | Cooldown duration after one proxy failure        | 30s                        |
 | `min_request_interval_ms` | Min interval per proxy request                   | 500                        |
-| `response_classifier`     | Custom response classifier for proxy health      | `DefaultResponseClassifier` |
-| `danger_accept_invalid_certs` | Accept invalid TLS certs (needed for most free proxies) | `false` |
+| `body_classifier`         | Custom body classifier for proxy health          | `DefaultBodyClassifier`    |
 
 ### Host-Based Routing (Multiple Pools)
 
@@ -157,33 +186,21 @@ let middleware = ProxyPoolMiddleware::new(config).await?;
 
 `primary=true` is required for exactly one host.
 
-### Migration (0.2 -> 0.3)
+### Migration (0.3 -> 0.4)
 
-- `ProxyPoolConfig` (single pool config) -> split into:
-  - top-level `ProxyPoolConfig { sources, hosts }`
-  - per-host `HostConfig`
-- `max_requests_per_second` -> `min_request_interval_ms`
-- `retry_strategy` added:
-  - `DefaultSelection`: previous behavior
-  - `NewProxyOnRetry`: force different proxy on retries
+Breaking API changes in `0.4`:
 
-Example migration:
+- `ResponseClassifier` -> `BodyClassifier`
+- `ProxyResponseVerdict` -> `ProxyBodyVerdict`
+- `.response_classifier(...)` -> `.body_classifier(...)`
+- `HostConfig::danger_accept_invalid_certs` removed
 
-```rust
-// v0.2
-// ProxyPoolConfig::builder().health_check_url(...).max_requests_per_second(3.0)
+New stability knobs:
 
-// v0.3
-let host = HostConfig::builder("target.example.com")
-    .primary(true)
-    .health_check_url("https://target.example.com/health")
-    .min_request_interval_ms(333)
-    .build();
-let config = ProxyPoolConfig::builder()
-    .sources(vec!["https://.../socks5.txt"])
-    .add_host(host)
-    .build();
-```
+- `ProxySelectionStrategy::TopKReliableRandom`
+- `HostConfig::reliable_top_k` (default `8`)
+- `HostConfig::proxy_cooldown` (default `30s`)
+- `ProxyPoolConfig::client_builder_factory(...)` for timeout/TLS/pool defaults on internally built proxied clients
 
 ## License
 

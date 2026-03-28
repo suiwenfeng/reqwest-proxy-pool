@@ -19,6 +19,8 @@ pub enum ProxyStatus {
     Healthy,
     /// The proxy is unhealthy and should not be used.
     Unhealthy,
+    /// The proxy is in half-open state and can be probed with real traffic.
+    HalfOpen,
 }
 
 /// Representation of a proxy server.
@@ -36,6 +38,8 @@ pub struct Proxy {
     pub last_check: Instant,
     /// Average response time in seconds, if available.
     pub response_time: Option<f64>,
+    /// When set, this proxy stays unavailable before cooldown expires.
+    pub cooldown_until: Option<Instant>,
     /// Rate limiter to enforce minimum interval between requests.
     pub limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock, NoOpMiddleware>>,
 }
@@ -57,6 +61,7 @@ impl Proxy {
             failure_count: 0,
             last_check: Instant::now(),
             response_time: None,
+            cooldown_until: None,
             limiter,
         }
     }

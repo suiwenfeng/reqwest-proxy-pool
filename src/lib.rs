@@ -15,7 +15,7 @@ pub mod pool;
 pub mod proxy;
 mod utils;
 
-pub use classifier::{DefaultResponseClassifier, ProxyResponseVerdict, ResponseClassifier};
+pub use classifier::{BodyClassifier, DefaultBodyClassifier, ProxyBodyVerdict};
 pub use config::{
     HostConfig, HostConfigBuilder, ProxyPoolConfig, ProxyPoolConfigBuilder, ProxySelectionStrategy,
     RetryStrategy,

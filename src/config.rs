@@ -1,9 +1,12 @@
 //! Configuration for the proxy pool.
 
-use crate::classifier::{DefaultResponseClassifier, ResponseClassifier};
+use crate::classifier::{BodyClassifier, DefaultBodyClassifier};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Factory used by middleware to create request clients before attaching proxy.
+pub type ClientBuilderFactory = Arc<dyn Fn() -> reqwest::ClientBuilder + Send + Sync>;
 
 /// Strategy for selecting a proxy from the pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +15,8 @@ pub enum ProxySelectionStrategy {
     FastestResponse,
     /// Select the proxy with the highest success rate.
     MostReliable,
+    /// Randomly select one proxy from Top-K by success rate.
+    TopKReliableRandom,
     /// Select a random healthy proxy.
     Random,
     /// Select proxies in round-robin fashion.
@@ -51,10 +56,12 @@ pub struct HostConfig {
     pub(crate) selection_strategy: ProxySelectionStrategy,
     /// Minimum interval between requests on the same proxy instance.
     pub(crate) min_request_interval_ms: u64,
-    /// Response classifier for business-level proxy health feedback.
-    pub(crate) response_classifier: Arc<dyn ResponseClassifier>,
-    /// Accept invalid TLS certificates (needed for most free SOCKS5 proxies).
-    pub(crate) danger_accept_invalid_certs: bool,
+    /// Body classifier for business-level proxy health feedback.
+    pub(crate) body_classifier: Arc<dyn BodyClassifier>,
+    /// Cooldown duration after a proxy failure.
+    pub(crate) proxy_cooldown: Duration,
+    /// K value for `TopKReliableRandom`.
+    pub(crate) reliable_top_k: usize,
 }
 
 impl fmt::Debug for HostConfig {
@@ -70,11 +77,9 @@ impl fmt::Debug for HostConfig {
             .field("retry_strategy", &self.retry_strategy)
             .field("selection_strategy", &self.selection_strategy)
             .field("min_request_interval_ms", &self.min_request_interval_ms)
-            .field("response_classifier", &"<dyn ResponseClassifier>")
-            .field(
-                "danger_accept_invalid_certs",
-                &self.danger_accept_invalid_certs,
-            )
+            .field("body_classifier", &"<dyn BodyClassifier>")
+            .field("proxy_cooldown", &self.proxy_cooldown)
+            .field("reliable_top_k", &self.reliable_top_k)
             .finish()
     }
 }
@@ -135,14 +140,19 @@ impl HostConfig {
         self.min_request_interval_ms
     }
 
-    /// Response classifier.
-    pub fn response_classifier(&self) -> &Arc<dyn ResponseClassifier> {
-        &self.response_classifier
+    /// Body classifier.
+    pub fn body_classifier(&self) -> &Arc<dyn BodyClassifier> {
+        &self.body_classifier
     }
 
-    /// Whether invalid TLS certificates are accepted.
-    pub fn danger_accept_invalid_certs(&self) -> bool {
-        self.danger_accept_invalid_certs
+    /// Cooldown duration after a proxy failure.
+    pub fn proxy_cooldown(&self) -> Duration {
+        self.proxy_cooldown
+    }
+
+    /// K value for `TopKReliableRandom`.
+    pub fn reliable_top_k(&self) -> usize {
+        self.reliable_top_k
     }
 }
 
@@ -158,8 +168,9 @@ pub struct HostConfigBuilder {
     retry_strategy: Option<RetryStrategy>,
     selection_strategy: Option<ProxySelectionStrategy>,
     min_request_interval_ms: Option<u64>,
-    response_classifier: Option<Arc<dyn ResponseClassifier>>,
-    danger_accept_invalid_certs: bool,
+    body_classifier: Option<Arc<dyn BodyClassifier>>,
+    proxy_cooldown: Option<Duration>,
+    reliable_top_k: Option<usize>,
 }
 
 impl HostConfigBuilder {
@@ -176,8 +187,9 @@ impl HostConfigBuilder {
             retry_strategy: None,
             selection_strategy: None,
             min_request_interval_ms: None,
-            response_classifier: None,
-            danger_accept_invalid_certs: false,
+            body_classifier: None,
+            proxy_cooldown: None,
+            reliable_top_k: None,
         }
     }
 
@@ -235,15 +247,21 @@ impl HostConfigBuilder {
         self
     }
 
-    /// Set custom classifier.
-    pub fn response_classifier(mut self, classifier: impl ResponseClassifier) -> Self {
-        self.response_classifier = Some(Arc::new(classifier));
+    /// Set custom body classifier.
+    pub fn body_classifier(mut self, classifier: impl BodyClassifier) -> Self {
+        self.body_classifier = Some(Arc::new(classifier));
         self
     }
 
-    /// Accept invalid TLS certificates.
-    pub fn danger_accept_invalid_certs(mut self, accept: bool) -> Self {
-        self.danger_accept_invalid_certs = accept;
+    /// Set cooldown duration after one failed request on a proxy.
+    pub fn proxy_cooldown(mut self, cooldown: Duration) -> Self {
+        self.proxy_cooldown = Some(cooldown);
+        self
+    }
+
+    /// Set K for `TopKReliableRandom`.
+    pub fn reliable_top_k(mut self, top_k: usize) -> Self {
+        self.reliable_top_k = Some(top_k.max(1));
         self
     }
 
@@ -279,21 +297,37 @@ impl HostConfigBuilder {
                 .selection_strategy
                 .unwrap_or(ProxySelectionStrategy::FastestResponse),
             min_request_interval_ms: self.min_request_interval_ms.unwrap_or(500).max(1),
-            response_classifier: self
-                .response_classifier
-                .unwrap_or_else(|| Arc::new(DefaultResponseClassifier)),
-            danger_accept_invalid_certs: self.danger_accept_invalid_certs,
+            body_classifier: self
+                .body_classifier
+                .unwrap_or_else(|| Arc::new(DefaultBodyClassifier)),
+            proxy_cooldown: self.proxy_cooldown.unwrap_or(Duration::from_secs(30)),
+            reliable_top_k: self.reliable_top_k.unwrap_or(8).max(1),
         }
     }
 }
 
 /// Top-level configuration.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ProxyPoolConfig {
     /// Shared source URLs used to build proxy lists for all host pools.
     pub(crate) sources: Vec<String>,
     /// Host-specific pool definitions.
     pub(crate) hosts: Vec<HostConfig>,
+    /// Factory used by middleware to create request clients before attaching proxy.
+    pub(crate) client_builder_factory: ClientBuilderFactory,
+}
+
+impl fmt::Debug for ProxyPoolConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProxyPoolConfig")
+            .field("sources", &self.sources)
+            .field("hosts", &self.hosts)
+            .field(
+                "client_builder_factory",
+                &"<dyn Fn() -> reqwest::ClientBuilder>",
+            )
+            .finish()
+    }
 }
 
 impl ProxyPoolConfig {
@@ -311,12 +345,18 @@ impl ProxyPoolConfig {
     pub fn hosts(&self) -> &[HostConfig] {
         &self.hosts
     }
+
+    /// Factory used by middleware to create request clients before attaching proxy.
+    pub fn client_builder_factory(&self) -> &ClientBuilderFactory {
+        &self.client_builder_factory
+    }
 }
 
 /// Builder for `ProxyPoolConfig`.
 pub struct ProxyPoolConfigBuilder {
     sources: Vec<String>,
     hosts: Vec<HostConfig>,
+    client_builder_factory: Option<ClientBuilderFactory>,
 }
 
 impl ProxyPoolConfigBuilder {
@@ -325,6 +365,7 @@ impl ProxyPoolConfigBuilder {
         Self {
             sources: Vec::new(),
             hosts: Vec::new(),
+            client_builder_factory: None,
         }
     }
 
@@ -350,11 +391,26 @@ impl ProxyPoolConfigBuilder {
         self
     }
 
+    /// Set request client builder factory.
+    ///
+    /// Middleware will call this factory on each attempt, then append proxy settings.
+    /// Use this to keep timeout/pool/TLS settings aligned with your outer client setup.
+    pub fn client_builder_factory<F>(mut self, factory: F) -> Self
+    where
+        F: Fn() -> reqwest::ClientBuilder + Send + Sync + 'static,
+    {
+        self.client_builder_factory = Some(Arc::new(factory));
+        self
+    }
+
     /// Build config.
     pub fn build(self) -> ProxyPoolConfig {
         ProxyPoolConfig {
             sources: self.sources,
             hosts: self.hosts,
+            client_builder_factory: self
+                .client_builder_factory
+                .unwrap_or_else(|| Arc::new(reqwest::Client::builder)),
         }
     }
 }

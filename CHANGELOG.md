@@ -5,7 +5,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Todo]
-- support caching request body
+- improve memory behavior for large buffered response bodies
+
+## [0.4.0] - 2026-03-29
+### Added
+- `BodyClassifier` and `ProxyBodyVerdict` for body-aware proxy usability classification.
+- `ProxySelectionStrategy::TopKReliableRandom`.
+- Proxy cooldown + half-open probing (`proxy_cooldown`) to reduce repeated hits on recently failing proxies.
+- Top-K tuning knob (`reliable_top_k`, default `8`).
+- `ProxyPoolConfig::client_builder_factory(...)` to let users provide shared request client defaults (timeout/TLS/pool settings).
+- Proxy URL -> `reqwest::Client` cache inside middleware to reduce per-attempt client rebuild overhead.
+### Changed
+- Middleware now reads response body before classification, attributes read failures to proxy health, and retries with new proxies according to policy.
+- Health checks now always use `danger_accept_invalid_certs(true)` to maximize connectivity validation coverage for unstable/free proxies.
+- README and simple example updated to a stability-first configuration model.
+### Removed
+- **Breaking:** removed `ResponseClassifier` / `ProxyResponseVerdict` from public API.
+- **Breaking:** removed `HostConfig::danger_accept_invalid_certs` option.
+- **Breaking:** removed `HostConfig::response_classifier(...)` builder method.
+### Migration
+- Replace `ResponseClassifier` with `BodyClassifier`.
+- Replace `ProxyResponseVerdict` with `ProxyBodyVerdict`.
+- Replace `.response_classifier(...)` with `.body_classifier(...)`.
+- If request timeout/TLS/pool settings are needed for internally built proxied clients, set `ProxyPoolConfig::builder().client_builder_factory(...)`.
 
 ## [0.3.0] - 2026-03-28
 ### Added
